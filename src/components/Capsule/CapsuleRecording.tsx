@@ -33,7 +33,6 @@ export function CapsuleRecording() {
       />
       <Waveform />
       <TranslateTargetChip />
-      <div className="flex-1" />
       <DurationTimer />
       <button
         onPointerDown={stopPointerPropagation}
