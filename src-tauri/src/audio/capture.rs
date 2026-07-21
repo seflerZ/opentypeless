@@ -41,7 +41,7 @@ pub struct AudioCaptureHandle {
 impl AudioCaptureHandle {
     /// Start audio capture on a dedicated thread. Returns a handle and a receiver for audio chunks.
     pub fn start(config: AudioConfig) -> Result<(Self, mpsc::Receiver<Vec<u8>>)> {
-        let (audio_tx, audio_rx) = mpsc::channel::<Vec<u8>>(200);
+        let (audio_tx, audio_rx) = mpsc::channel::<Vec<u8>>(1200); // ~24s buffer at 20ms/chunk
         let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
         let volume = Arc::new(Mutex::new(0.0f32));
         let state = Arc::new(Mutex::new(CaptureState::Recording));
