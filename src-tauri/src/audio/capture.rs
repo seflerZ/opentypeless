@@ -156,10 +156,27 @@ fn run_capture(
     let stream = device.build_input_stream(
         &stream_config,
         move |data: &[f32], _: &cpal::InputCallbackInfo| {
-            // Calculate RMS volume from raw data
-            let rms = (data.iter().map(|s| s * s).sum::<f32>() / data.len() as f32).sqrt();
+            // Calculate RMS and peak volume from raw data.
+            // Guard against NaN/Inf samples which some devices may produce.
+            let (sum, peak, count) = data.iter().fold(
+                (0.0f32, 0.0f32, 0usize),
+                |(s, p, c), &v| {
+                    if v.is_finite() {
+                        (s + v * v, p.max(v.abs()), c + 1)
+                    } else {
+                        (s, p, c)
+                    }
+                },
+            );
+            let rms = if count > 0 {
+                (sum / count as f32).sqrt()
+            } else {
+                0.0
+            };
+            // Use the larger of RMS and scaled peak for responsive waveform
+            let vol = rms.max(peak * 0.3).min(1.0);
             if let Ok(mut v) = volume.lock() {
-                *v = rms.min(1.0);
+                *v = vol;
             }
 
             // Convert to mono if needed

@@ -1365,7 +1365,18 @@ impl PipelineHandle {
                     .as_ref()
                     .map(|h| h.get_volume())
                     .unwrap_or(0.0);
-                let _ = app_handle.emit("audio:volume", vol);
+                // Apply aggressive gain so the level meter is lively.
+                // Raw volume 0.005 → (0.1).sqrt() ≈ 0.32,  0.02 → 0.63,  0.05 → 1.0
+                const VOLUME_GAIN: f32 = 20.0;
+                let display_vol = (vol * VOLUME_GAIN).sqrt().clamp(0.0, 1.0);
+                if display_vol > 0.01 {
+                    tracing::debug!("audio:volume={:.4}", display_vol);
+                }
+                let _ = app_handle.emit("audio:volume", display_vol);
+                // Always log raw volume for debugging; visible in stderr
+                if vol > 0.0001 {
+                    tracing::info!("vol(raw)={:.6} display={:.4}", vol, display_vol);
+                }
             }
         });
 
