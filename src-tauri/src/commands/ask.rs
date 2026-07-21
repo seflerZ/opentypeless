@@ -13,6 +13,31 @@ use crate::voice_intent::{
 };
 use crate::{api_base_url, with_desktop_client_version, SessionTokenStore};
 use serde_json::json;
+
+/// Strip <thinking>...</thinking> blocks from model responses.
+fn strip_thinking(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut remaining = text;
+    let mut in_thinking = false;
+    loop {
+        if in_thinking {
+            if let Some(end) = remaining.find("</thinking>") {
+                in_thinking = false;
+                remaining = &remaining[end + "</thinking>".len()..];
+            } else {
+                break;
+            }
+        } else if let Some(start) = remaining.find("<thinking>") {
+            out.push_str(&remaining[..start]);
+            in_thinking = true;
+            remaining = &remaining[start + "<thinking>".len()..];
+        } else {
+            out.push_str(remaining);
+            break;
+        }
+    }
+    out
+}
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
@@ -858,12 +883,14 @@ async fn ask_via_byok(
 fn extract_byok_ask_answer(body: &serde_json::Value) -> Result<String, String> {
     let message = &body["choices"][0]["message"];
     if let Some(content) = message["content"].as_str() {
-        if !content.trim().is_empty() {
-            return validate_ask_answer(content);
+        let cleaned = strip_thinking(content);
+        if !cleaned.trim().is_empty() {
+            return validate_ask_answer(&cleaned);
         }
     }
 
-    validate_ask_answer(message["reasoning_content"].as_str().unwrap_or(""))
+    let rc = message["reasoning_content"].as_str().unwrap_or("");
+    validate_ask_answer(&strip_thinking(rc))
 }
 
 async fn ask_via_cloud(
@@ -906,7 +933,8 @@ async fn ask_via_cloud(
     }
 
     let body: serde_json::Value = resp.json().await.map_err(AppError::from)?;
-    validate_ask_answer(body["answer"].as_str().unwrap_or("")).map_err(AppError::Config)
+    let answer = strip_thinking(body["answer"].as_str().unwrap_or(""));
+    validate_ask_answer(&answer).map_err(AppError::Config)
 }
 
 #[tauri::command]

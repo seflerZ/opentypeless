@@ -6,6 +6,31 @@ use crate::error::AppError;
 
 use super::{prompt, ChunkCallback, LlmConfig, LlmProvider, PolishRequest, PolishResponse};
 
+/// Strip <thinking>...</thinking> blocks from text. These are emitted by
+/// reasoning models (DeepSeek R1, QwQ, etc.) and should not appear in output.
+fn strip_thinking(text: &str, in_thinking: &mut bool) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut remaining = text;
+    loop {
+        if *in_thinking {
+            if let Some(end) = remaining.find("</thinking>") {
+                *in_thinking = false;
+                remaining = &remaining[end + "</thinking>".len()..];
+            } else {
+                break;
+            }
+        } else if let Some(start) = remaining.find("<thinking>") {
+            out.push_str(&remaining[..start]);
+            *in_thinking = true;
+            remaining = &remaining[start + "<thinking>".len()..];
+        } else {
+            out.push_str(remaining);
+            break;
+        }
+    }
+    out
+}
+
 pub struct OpenAiProvider {
     client: Client,
 }
@@ -183,6 +208,7 @@ impl LlmProvider for OpenAiProvider {
             // Streaming mode
             let mut full_text = String::new();
             let mut reasoning_text = String::new();
+            let mut in_thinking = false;
             let mut stream = response.bytes_stream();
 
             let mut buffer = String::new();
@@ -204,8 +230,11 @@ impl LlmProvider for OpenAiProvider {
 
                             if let Some(content) = delta["content"].as_str() {
                                 if !content.is_empty() {
-                                    full_text.push_str(content);
-                                    callback(content);
+                                    let cleaned = strip_thinking(content, &mut in_thinking);
+                                    if !cleaned.is_empty() {
+                                        full_text.push_str(&cleaned);
+                                        callback(&cleaned);
+                                    }
                                 }
                             }
 
@@ -213,7 +242,10 @@ impl LlmProvider for OpenAiProvider {
                             // where all output may land in this field instead of content
                             if let Some(rc) = delta["reasoning_content"].as_str() {
                                 if !rc.is_empty() {
-                                    reasoning_text.push_str(rc);
+                                    let cleaned = strip_thinking(rc, &mut in_thinking);
+                                    if !cleaned.is_empty() {
+                                        reasoning_text.push_str(&cleaned);
+                                    }
                                 }
                             }
                         }
@@ -240,10 +272,11 @@ impl LlmProvider for OpenAiProvider {
         } else {
             // Non-streaming mode
             let v: serde_json::Value = response.json().await?;
-            let text = v["choices"][0]["message"]["content"]
+            let raw = v["choices"][0]["message"]["content"]
                 .as_str()
                 .unwrap_or("")
                 .to_string();
+            let text = strip_thinking(&raw, &mut false);
 
             if text.is_empty() {
                 tracing::warn!(
