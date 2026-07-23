@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "cards": [
+    {
+      "id": "c_1784619732_a049",
+      "type": "progress-list",
+      "ts": "2026-07-21T15:42:12+08:00",
+      "tags": [
+        "progress"
+      ],
+      "data": {
+        "title": "LLM输出优化",
+        "items": [
+          {
+            "label": "strip thinking标签",
+            "pct": 100
+          }
+        ]
+      }
+    },
+    {
+      "id": "c_1784619727_4082",
+      "type": "progress-list",
+      "ts": "2026-07-21T17:10:45+08:00",
+      "tags": [
+        "progress"
+      ],
+      "links": [
+        {
+          "targetId": "c_1784614366_16ae",
+          "relation": "related-to",
+          "label": "音量优化与缓冲队列同属音频优化阶段"
+        }
+      ],
+      "data": {
+        "title": "音频优化",
+        "items": [
+          {
+            "label": "先启动音频再连STT",
+            "pct": 100
+          }
+        ]
+      }
+    },
+    {
+      "id": "c_1784614366_16ae",
+      "type": "kv",
+      "ts": "2026-07-21T15:40:38+08:00",
+      "tags": [
+        "config"
+      ],
+      "links": [
+        {
+          "targetId": "c_1784614361_1fe6",
+          "relation": "implements",
+          "label": "1200 slot 缓冲队列为先启动音频提供了缓冲能力"
+        }
+      ],
+      "data": {
+        "pairs": [
+          {
+            "key": "音频缓冲队列",
+            "value": "1200 slots (~24s)"
+          }
+        ]
+      }
+    },
+    {
+      "id": "c_1784614361_1fe6",
+      "type": "badge",
+      "ts": "2026-07-21T14:12:41+08:00",
+      "tags": [
+        "decision"
+      ],
+      "data": {
+        "label": "先启动音频捕获再连 STT",
+        "color": "green"
+      }
+    }
+  ],
+  "updatedAt": "2026-07-21T17:10:45+08:00"
+}

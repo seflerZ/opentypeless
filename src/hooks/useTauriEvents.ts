@@ -32,6 +32,7 @@ export function useTauriEvents() {
     setPartialTranscript,
     setFinalTranscript,
     appendPolishedChunk,
+    setPolishedText,
     setPipelineState,
     setActiveVoiceMode,
     setTargetApp,
@@ -71,6 +72,10 @@ export function useTauriEvents() {
       if (state === 'preparing' || state === 'recording' || state === 'ask_recording') {
         // Clear any previous error when starting a new pipeline run
         setPipelineError(null)
+        // Clear stale transcript from previous recording (hotkey starts via Rust
+        // backend without going through useRecording.startRecording → resetRecording)
+        setPartialTranscript('')
+        setPolishedText('')
       }
       if (state === 'idle') {
         // Don't clear pipelineError here — CapsuleError auto-resets after 2.5s.
@@ -139,6 +144,7 @@ export function useTauriEvents() {
     setPartialTranscript,
     setFinalTranscript,
     appendPolishedChunk,
+    setPolishedText,
     setPipelineState,
     setActiveVoiceMode,
     setTargetApp,
