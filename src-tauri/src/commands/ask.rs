@@ -13,7 +13,6 @@ use crate::voice_intent::{
 };
 use crate::{api_base_url, with_desktop_client_version, SessionTokenStore};
 use serde_json::json;
-
 /// Strip <think>...</think> / <thinking>...</thinking> blocks from model responses.
 fn strip_thinking(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -39,6 +38,7 @@ fn strip_thinking(text: &str) -> String {
     }
     out
 }
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
@@ -48,6 +48,7 @@ pub const ASK_MAX_QUESTION_CHARS: usize = 500;
 pub const ASK_MAX_SELECTED_TEXT_CHARS: usize = 4_000;
 pub const ASK_OUTPUT_TOKEN_LIMIT: u32 = 80;
 const ASK_STT_FINALIZE_TIMEOUT_SECS: u64 = 12;
+static ASK_RECORDING_SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -164,6 +165,7 @@ impl AskDictationState {
 
 pub struct AskDictationSession {
     handle: AudioCaptureHandle,
+    recording_session_id: u64,
     operation_id: String,
     recording_context: RecordingContext,
     selected_text: Option<String>,
@@ -662,6 +664,10 @@ fn build_ask_stt_config(
             None
         },
         operation_id: Some(operation_id),
+        managed_audio: stt::capabilities::managed_audio_encoding_config(
+            config,
+            chrono::Utc::now().timestamp(),
+        ),
     }
 }
 
@@ -1055,19 +1061,61 @@ pub(crate) async fn start_reserved_ask_dictation(
         };
         let operation_id = synthetic_operation_id();
         let stt_config = build_ask_stt_config(&config, stt_api_key, operation_id.clone());
+        let managed_cloud_session_token =
+            (config.stt_provider == "cloud").then(|| stt_config.api_key.clone());
+        if let Some(session_token) = managed_cloud_session_token.clone() {
+            stt::cloud::warm_managed_cloud_on_intent(client.inner().clone(), session_token);
+        }
         let mut provider = stt::create_provider(
             &config.stt_provider,
             custom_whisper_config,
             Some(client.inner().clone()),
         )
         .map_err(|e| e.to_string())?;
-        provider
-            .connect(&stt_config)
-            .await
-            .map_err(|e| e.to_string())?;
-
-        let (handle, mut audio_rx) = AudioCaptureHandle::start(AudioConfig::default())
+        let (mut handle, mut audio_rx) = AudioCaptureHandle::start(AudioConfig::default())
             .map_err(|e| map_audio_capture_error(&e.to_string()))?;
+        let capture_ready_at = match crate::audio::await_recording_startup(
+            handle.wait_until_ready(),
+            provider.connect(&stt_config),
+        )
+        .await
+        {
+            Ok(capture_ready_at) => capture_ready_at,
+            Err(error) => {
+                handle.stop();
+                return Err(match error {
+                crate::audio::RecordingStartupError::Audio(error) => {
+                    map_audio_capture_error(&error.to_string())
+                }
+                crate::audio::RecordingStartupError::Stt(error) => error.to_string(),
+                crate::audio::RecordingStartupError::Timeout => {
+                    "Recording startup timed out after 30 seconds. Please try again.".to_string()
+                }
+                });
+            }
+        };
+        let recording_session_id = ASK_RECORDING_SESSION_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let resolved_limit = stt::capabilities::resolve_recording_limit(
+            &config,
+            None,
+            chrono::Utc::now().timestamp(),
+        );
+        let effective_max_seconds = provider
+            .recording_limit_override_seconds()
+            .map_or(resolved_limit.effective_max_seconds, |override_seconds| {
+                resolved_limit.effective_max_seconds.min(override_seconds)
+            });
+        let deadline_explanation_key = provider
+            .recording_limit_override_explanation_key()
+            .unwrap_or(&resolved_limit.capability.explanation_key)
+            .to_string();
+        let deadline_provider_id = resolved_limit.capability.provider_id;
+        let recording_deadline = crate::recording_deadline::RecordingDeadline::new(
+            recording_session_id,
+            crate::recording_deadline::RecordingKind::Ask,
+            capture_ready_at,
+            effective_max_seconds,
+        );
         let mut handle = Some(handle);
         let transcript = Arc::new(Mutex::new(String::new()));
         let error = Arc::new(Mutex::new(None::<String>));
@@ -1084,6 +1132,7 @@ pub(crate) async fn start_reserved_ask_dictation(
                 guard.starting = false;
                 guard.session = Some(AskDictationSession {
                     handle: handle.take().expect("Ask audio handle was already consumed"),
+                    recording_session_id,
                     operation_id,
                     recording_context,
                     selected_text,
@@ -1104,7 +1153,41 @@ pub(crate) async fn start_reserved_ask_dictation(
         }
 
         emit_capsule_state(&app, PipelineState::AskRecording);
+        let _ = app.emit("recording:deadline", recording_deadline.event);
         let state_inner = state.0.clone();
+        let deadline_state_inner = state.0.clone();
+        let deadline_app = app.clone();
+        if let Some(session_token) = managed_cloud_session_token {
+            let warmup_client = client.inner().clone();
+            let warmup_state_inner = state.0.clone();
+            tauri::async_runtime::spawn(async move {
+                for elapsed_seconds in [240u64, 480] {
+                    if elapsed_seconds >= u64::from(effective_max_seconds) {
+                        break;
+                    }
+                    tokio::time::sleep_until(tokio::time::Instant::from_std(
+                        capture_ready_at.monotonic
+                            + std::time::Duration::from_secs(elapsed_seconds),
+                    ))
+                    .await;
+                    let is_active = warmup_state_inner
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .session
+                        .as_ref()
+                        .is_some_and(|session| {
+                            session.recording_session_id == recording_session_id
+                        });
+                    if !is_active {
+                        break;
+                    }
+                    stt::cloud::warm_managed_cloud_on_intent(
+                        warmup_client.clone(),
+                        session_token.clone(),
+                    );
+                }
+            });
+        }
 
         tauri::async_runtime::spawn(async move {
             loop {
@@ -1186,6 +1269,69 @@ pub(crate) async fn start_reserved_ask_dictation(
             }
 
             done.notify_waiters();
+        });
+
+        tauri::async_runtime::spawn(async move {
+            let reached = crate::recording_deadline::drive_recording_deadline(
+                recording_deadline,
+                || {
+                    deadline_state_inner
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .session
+                        .as_ref()
+                        .is_some_and(|session| {
+                            session.recording_session_id == recording_session_id
+                        })
+                },
+                |signal| match signal {
+                    crate::recording_deadline::RecordingDeadlineSignal::Warning {
+                        seconds_remaining,
+                    } => {
+                        let _ = deadline_app.emit(
+                            "recording:deadline-warning",
+                            json!({
+                                "sessionId": recording_session_id,
+                                "recordingKind": "ask",
+                                "secondsRemaining": seconds_remaining,
+                                "effectiveMaxSeconds": effective_max_seconds,
+                                "providerId": deadline_provider_id.as_str(),
+                                "explanationKey": deadline_explanation_key.as_str(),
+                            }),
+                        );
+                    }
+                    crate::recording_deadline::RecordingDeadlineSignal::Reached => {
+                        let _ = deadline_app.emit(
+                            "recording:deadline-reached",
+                            json!({
+                                "sessionId": recording_session_id,
+                                "recordingKind": "ask",
+                                "effectiveMaxSeconds": effective_max_seconds,
+                                "providerId": deadline_provider_id.as_str(),
+                                "explanationKey": deadline_explanation_key.as_str(),
+                            }),
+                        );
+                    }
+                },
+            )
+            .await;
+            if reached {
+                let ask_state = deadline_app.state::<AskDictationState>();
+                let config_state = deadline_app.state::<storage::ConfigManager>();
+                let token_store = deadline_app.state::<SessionTokenStore>();
+                let client = deadline_app.state::<reqwest::Client>();
+                if let Err(error) = stop_ask_flow(
+                    deadline_app.clone(),
+                    ask_state,
+                    config_state,
+                    token_store,
+                    client,
+                )
+                .await
+                {
+                    tracing::error!("Failed to stop Ask at the provider deadline: {error}");
+                }
+            }
         });
 
         Ok(start_result)

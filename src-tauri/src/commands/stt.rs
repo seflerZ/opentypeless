@@ -1,8 +1,85 @@
 use crate::credentials::{resolve_config_secret, SystemCredentialVault};
+use crate::storage;
 use crate::stt;
 use crate::stt::SttProvider;
 use crate::SessionTokenStore;
 use crate::{api_base_url, with_desktop_client_version};
+use tauri::Emitter;
+
+#[tauri::command]
+pub async fn get_stt_recording_capability(
+    state: tauri::State<'_, storage::ConfigManager>,
+    provider: String,
+    mode: stt::capabilities::RecordingLimitMode,
+    custom_seconds: u32,
+) -> Result<stt::capabilities::ResolvedRecordingLimit, String> {
+    let mut config = state.load().await.map_err(|error| error.to_string())?;
+    config.stt_provider = provider;
+    config.recording_limit_mode = mode;
+    config.custom_recording_limit_seconds = custom_seconds;
+    Ok(stt::capabilities::resolve_recording_limit(
+        &config,
+        None,
+        chrono::Utc::now().timestamp(),
+    ))
+}
+
+#[tauri::command]
+pub async fn cache_managed_stt_capability(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, storage::ConfigManager>,
+    account_snapshot: stt::capabilities::AuthenticatedAccountSnapshot,
+    expected_user_id: String,
+) -> Result<stt::capabilities::ResolvedRecordingLimit, String> {
+    let now = chrono::Utc::now().timestamp();
+    let managed_state = stt::capabilities::managed_state_from_authenticated_snapshot(
+        account_snapshot,
+        &expected_user_id,
+        now,
+    )?;
+    let mut config = state.load().await.map_err(|error| error.to_string())?;
+    let previous_max_seconds = config.max_recording_seconds;
+    config.managed_stt_capability_state = managed_state;
+    config.recompute_recording_limit_mirror();
+    state
+        .save(&config)
+        .await
+        .map_err(|error| error.to_string())?;
+    if config.max_recording_seconds != previous_max_seconds {
+        let _ = app.emit(
+            "config:patch",
+            serde_json::json!({ "max_recording_seconds": config.max_recording_seconds }),
+        );
+    }
+    Ok(stt::capabilities::resolve_recording_limit(
+        &config, None, now,
+    ))
+}
+
+#[tauri::command]
+pub async fn clear_managed_stt_capability(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, storage::ConfigManager>,
+) -> Result<(), String> {
+    let mut config = state.load().await.map_err(|error| error.to_string())?;
+    if config.managed_stt_capability_state.is_none() {
+        return Ok(());
+    }
+    let previous_max_seconds = config.max_recording_seconds;
+    config.managed_stt_capability_state = None;
+    config.recompute_recording_limit_mirror();
+    state
+        .save(&config)
+        .await
+        .map_err(|error| error.to_string())?;
+    if config.max_recording_seconds != previous_max_seconds {
+        let _ = app.emit(
+            "config:patch",
+            serde_json::json!({ "max_recording_seconds": config.max_recording_seconds }),
+        );
+    }
+    Ok(())
+}
 
 async fn check_volcengine_doubao_connection(
     api_key: &str,
@@ -16,6 +93,7 @@ async fn check_volcengine_doubao_connection(
         sample_rate: 16000,
         resource_id,
         operation_id: None,
+        managed_audio: None,
     };
     provider.connect(&config).await.map_err(|e| e.to_string())?;
     let _ = provider.disconnect().await;

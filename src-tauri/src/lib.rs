@@ -12,6 +12,7 @@ pub mod native_hotkey;
 pub mod output;
 pub mod pipeline;
 pub mod platform;
+pub mod recording_deadline;
 pub mod selection;
 pub mod storage;
 pub mod stt;
@@ -1080,6 +1081,9 @@ pub fn run() {
             commands::credentials::clear_credential,
             commands::credentials::migrate_legacy_credentials,
             commands::stt::get_stt_provider_diagnostics,
+            commands::stt::get_stt_recording_capability,
+            commands::stt::cache_managed_stt_capability,
+            commands::stt::clear_managed_stt_capability,
             commands::stt::test_stt_connection,
             commands::llm::test_llm_connection,
             commands::llm::bench_llm_connection,
