@@ -42,6 +42,7 @@ jelly-reference*.png
 .playwright-mcp/
 .playwright-cli/
 .codex-target-clippy/
+.oh-my-coder/*
 /output/
 
 # Local release artifacts
@@ -56,3 +57,7 @@ docs/superpowers/
 
 # Local isolated worktrees
 .worktrees/
+
+# Session-Board data
+.oh-my-coder
+.claude

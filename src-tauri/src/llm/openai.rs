@@ -6,23 +6,26 @@ use crate::error::AppError;
 
 use super::{prompt, ChunkCallback, LlmConfig, LlmProvider, PolishRequest, PolishResponse};
 
-/// Strip <thinking>...</thinking> blocks from text. These are emitted by
-/// reasoning models (DeepSeek R1, QwQ, etc.) and should not appear in output.
+/// Strip <think>...</think> and <thinking>...</thinking> blocks from text.
+/// These are emitted by reasoning models (DeepSeek R1, QwQ, MiniMax-M3, etc.)
+/// and should not appear in output.
 fn strip_thinking(text: &str, in_thinking: &mut bool) -> String {
     let mut out = String::with_capacity(text.len());
     let mut remaining = text;
     loop {
         if *in_thinking {
-            if let Some(end) = remaining.find("</thinking>") {
+            // Check for both </think> and </thinking> closing tags
+            if let Some(end) = remaining.find("</think>") {
                 *in_thinking = false;
-                remaining = &remaining[end + "</thinking>".len()..];
+                let after_tag = end + "</think>".len();
+                remaining = &remaining[after_tag..];
             } else {
                 break;
             }
-        } else if let Some(start) = remaining.find("<thinking>") {
+        } else if let Some(start) = remaining.find("<think>") {
             out.push_str(&remaining[..start]);
             *in_thinking = true;
-            remaining = &remaining[start + "<thinking>".len()..];
+            remaining = &remaining[start + "<think>".len()..];
         } else {
             out.push_str(remaining);
             break;
@@ -113,6 +116,17 @@ impl LlmProvider for OpenAiProvider {
                 );
                 obj.insert("temperature".to_string(), serde_json::json!(1.0));
                 obj.insert("top_p".to_string(), serde_json::json!(0.95));
+            }
+        }
+
+        // MiniMax-M3 defaults to thinking mode, which is slow for dictation polishing.
+        // Explicitly disable it for faster responses.
+        if config.model.starts_with("minimax") {
+            if let Some(obj) = body.as_object_mut() {
+                obj.insert(
+                    "thinking".to_string(),
+                    serde_json::json!({"type": "disabled"}),
+                );
             }
         }
 

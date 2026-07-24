@@ -1,7 +1,0 @@
-{
-  "level": "simple",
-  "model": "deepseek-v4-flash",
-  "pid": 13236,
-  "mode": "interactive",
-  "contextLimit": 1000000
-}

@@ -14,23 +14,24 @@ use crate::voice_intent::{
 use crate::{api_base_url, with_desktop_client_version, SessionTokenStore};
 use serde_json::json;
 
-/// Strip <thinking>...</thinking> blocks from model responses.
+/// Strip <think>...</think> / <thinking>...</thinking> blocks from model responses.
 fn strip_thinking(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut remaining = text;
     let mut in_thinking = false;
     loop {
         if in_thinking {
-            if let Some(end) = remaining.find("</thinking>") {
+            if let Some(end) = remaining.find("</think>") {
                 in_thinking = false;
-                remaining = &remaining[end + "</thinking>".len()..];
+                let after_tag = end + "</think>".len();
+                remaining = &remaining[after_tag..];
             } else {
                 break;
             }
-        } else if let Some(start) = remaining.find("<thinking>") {
+        } else if let Some(start) = remaining.find("<think>") {
             out.push_str(&remaining[..start]);
             in_thinking = true;
-            remaining = &remaining[start + "<thinking>".len()..];
+            remaining = &remaining[start + "<think>".len()..];
         } else {
             out.push_str(remaining);
             break;
