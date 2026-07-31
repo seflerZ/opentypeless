@@ -202,13 +202,14 @@ pub fn build_context_system_prompt(options: ContextPromptOptions<'_>) -> String 
     prompt.push_str("\n\n[BUILTIN_POLISH_STYLE]");
     let has_scene_prompt =
         !mapped_scene_prompt.trim().is_empty() || !active_scene_prompt.trim().is_empty();
+    let has_custom_prompt = !polish_custom_prompt.trim().is_empty();
     if has_selected_text {
         prompt.push_str(
             "\nSkipped because the spoken selected-text instruction owns the transformation.",
         );
-    } else if has_scene_prompt {
+    } else if has_scene_prompt || has_custom_prompt {
         prompt.push_str(
-            "\nSkipped because the app writing mode or selected scene owns the output shape.",
+            "\nSkipped because a scene, app writing mode, or custom polish prompt owns the output shape.",
         );
     } else {
         append_polish_style_prompt(&mut prompt, polish_style);
