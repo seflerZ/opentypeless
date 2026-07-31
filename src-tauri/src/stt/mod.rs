@@ -1,3 +1,4 @@
+pub mod aliyun_qwen3_asr;
 pub mod apple_speech;
 pub mod assemblyai;
 pub mod capabilities;
@@ -24,6 +25,7 @@ pub struct SttConfig {
     pub resource_id: Option<String>,
     pub operation_id: Option<String>,
     pub managed_audio: Option<managed_audio::ManagedAudioEncodingConfig>,
+    pub provider_region: Option<String>,
 }
 
 impl Default for SttConfig {
@@ -36,6 +38,7 @@ impl Default for SttConfig {
             resource_id: None,
             operation_id: None,
             managed_audio: None,
+            provider_region: None,
         }
     }
 }
@@ -83,6 +86,9 @@ pub fn create_provider(
         }
         "assemblyai" => Ok(Box::new(assemblyai::AssemblyAiProvider::new())),
         "deepgram" => Ok(Box::new(deepgram::DeepgramProvider::new())),
+        aliyun_qwen3_asr::ALIYUN_QWEN3_ASR_PROVIDER => {
+            Ok(Box::new(aliyun_qwen3_asr::AliyunQwen3AsrProvider::new()))
+        }
         apple_speech::APPLE_SPEECH_PROVIDER => {
             Ok(Box::new(apple_speech::AppleSpeechProvider::new()))
         }
@@ -137,6 +143,12 @@ mod tests {
     fn creates_volcengine_doubao_realtime_provider() {
         let provider = create_provider("volcengine-doubao", None, None).unwrap();
         assert_eq!(provider.name(), "Volcengine Doubao Realtime ASR");
+    }
+
+    #[test]
+    fn creates_aliyun_qwen3_realtime_provider() {
+        let provider = create_provider("aliyun-qwen3-asr", None, None).unwrap();
+        assert_eq!(provider.name(), "Aliyun Qwen3 Realtime ASR");
     }
 
     #[test]
